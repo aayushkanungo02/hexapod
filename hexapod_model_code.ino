@@ -1,753 +1,233 @@
-#include <SoftwareSerial.h>      // We use software serial on pins D12 and D8 for HC06
-SoftwareSerial Bluetooth(12, 9); // Arduino RX 12 and TX 9 -> HC-06 Bluetooth TX RX
-#include <Servo.h>               //We will use servo library
 
-//Variables
-int Received = 0;             //here we store the received byte number from Bluetooth
-int DELAY = 5;                //Delay in ms for the main loop, the bigger, the slower will the robot move
-int MODE = 0;                 //Start mode is 0, so all motors -> home position
-bool Impair_start = false;    //In order to add phase rotation between legs, we use this variable
-int FM1 = 0;                  //The leg movement loop has different stages
-int FM2 = 0;                  //Each of these variables will be used in those stages
-int FM3 = 0;                  //We use these as counters to count degrees
-int FM4 = 0;                  //...
-int FM5 = 0;                  //...
-int FM6 = 0;                  //...
-int FM7 = 0;                  //...
-int FM8 = 0;                  //...
+// Push-Up and Down code
 
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
-/*/////////////////Initial home position in degrees//////////////////
-The first leg is the front left leg as seen from the front
-Thew first motor of each leg is the one closer to the robot body*/
-int home_Leg1_Mot1 = 75; 
-int home_Leg1_Mot2 = 90; 
-int home_Leg1_Mot3 = 100;
+Adafruit_PWMServoDriver PCA1(0x40), PCA2(0x41);
+#define SERVOMIN 150
+#define SERVOMAX 600
 
-int home_Leg2_Mot1 = 70;
-int home_Leg2_Mot2 = 90;
-int home_Leg2_Mot3 = 115;
+int angleToPulse(int angle) {
+    int pulse = map(constrain(angle, 0, 180), 0, 180, SERVOMIN, SERVOMAX);
+    Serial.print("Angle: "); Serial.print(angle);
+    Serial.print(" -> Pulse: "); Serial.println(pulse);
+    return pulse;
+}
 
-int home_Leg3_Mot1 = 70;
-int home_Leg3_Mot2 = 90;
-int home_Leg3_Mot3 = 100;
+void setServoPositions(Adafruit_PWMServoDriver &PCA, const int (*pins)[2], size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        int pulse = angleToPulse(pins[i][1]);
+        PCA.setPWM(pins[i][0], 0, pulse);
+        Serial.print("Servo "); Serial.print(pins[i][0]);
+        Serial.print(" set to pulse "); Serial.println(pulse);
+    }
+}
 
-int home_Leg4_Mot1 = 105;
-int home_Leg4_Mot2 = 90;
-int home_Leg4_Mot3 = 110;
-
-int home_Leg5_Mot1 = 75;
-int home_Leg5_Mot2 = 90;
-int home_Leg5_Mot3 = 90;
-
-int home_Leg6_Mot1 = 110;
-int home_Leg6_Mot2 = 100;
-int home_Leg6_Mot3 = 115;
-/*/////////////////////////////////////////////////////////////////*/
-
-
-/*//////////////////////Declare the Servos/////////////////////////*/
-Servo Leg1_Mot1, Leg1_Mot2, Leg1_Mot3;    //Motors 1,2 and 3 of leg 1
-Servo Leg2_Mot1, Leg2_Mot2, Leg2_Mot3;    //Motors 1,2 and 3 of leg 2 
-Servo Leg3_Mot1, Leg3_Mot2, Leg3_Mot3;    //Motors 1,2 and 3 of leg 3 
-Servo Leg4_Mot1, Leg4_Mot2, Leg4_Mot3;    //Motors 1,2 and 3 of leg 4 
-Servo Leg5_Mot1, Leg5_Mot2, Leg5_Mot3;    //Motors 1,2 and 3 of leg 5 
-Servo Leg6_Mot1, Leg6_Mot2, Leg6_Mot3;    //Motors 1,2 and 3 of leg 6 
-int LED = 17;
-int bat = A1;
-/*/////////////////////////////////////////////////////////////////*/ 
-
+const int leftStand[][2] = {{0, 45}, {8, 135}, {3, 90}, {4, 45}, {5, 135}, {6, 90}, {13, 45}, {14, 135}, {15, 90}};
+const int rightStand[][2] = {{0, 45}, {1, 135}, {2, 90}, {3, 45}, {4, 135}, {5, 90}, {7, 45}, {12, 135}, {13, 90}};
+const int leftSit[][2] = {{0, 90}, {8, 90}, {3, 90}, {4, 90}, {5, 90}, {6, 90}, {13, 90}, {14, 90}, {15, 90}};
+const int rightSit[][2] = {{0, 90}, {1, 90}, {2, 90}, {3, 90}, {4, 90}, {5, 90}, {7, 90}, {12, 90}, {13, 90}};
 
 void setup() {
-  Serial.begin(9600);     //We use the Arduino monitopr for debug...
-  Bluetooth.begin(9600);  // My default baud rate of the HC06, yours can be different
-  pinMode(LED, OUTPUT);
-  pinMode(bat, INPUT);
-  digitalWrite(LED, LOW);
-  
-  //Select digital pins of the MEGA for each motro
-  Leg1_Mot1.attach(35);
-  Leg1_Mot2.attach(37);
-  Leg1_Mot3.attach(39);
-
-  Leg2_Mot1.attach(29);
-  Leg2_Mot2.attach(31);
-  Leg2_Mot3.attach(33);
-
-  Leg3_Mot1.attach(34);
-  Leg3_Mot2.attach(36);
-  Leg3_Mot3.attach(38);
-
-  Leg4_Mot1.attach(26);
-  Leg4_Mot2.attach(24);
-  Leg4_Mot3.attach(22);
-
-  Leg5_Mot1.attach(32);
-  Leg5_Mot2.attach(30);
-  Leg5_Mot3.attach(28);
-
-  Leg6_Mot1.attach(27);
-  Leg6_Mot2.attach(25);
-  Leg6_Mot3.attach(23);
-  /*/////////////////////////////////////////////////////////////////*/ 
-  
-  set_home_pos();       //Home all motors
+    Serial.begin(115200);
+    Serial.println("Initializing PCA9685 boards...");
+    PCA1.begin(); PCA1.setPWMFreq(50);
+    PCA2.begin(); PCA2.setPWMFreq(50);
+    delay(10);
+    Serial.println("PCA9685 boards initialized.");
 }
 
 void loop() {
-  /*Battery is 12.6V fully charged. We want to enable the LED when battery is below 8.5V.
-  Divider is 1k/3K so 0.33 * 8.5 = 2.83 volts -> in 10 bits = 580
-  */
-  if(analogRead(bat) < 580)
-  {
-    digitalWrite(LED, HIGH);
-  }
-  else
-  {
-    digitalWrite(LED, LOW);
-  }
+    Serial.println("Standing up...");
+    setServoPositions(PCA1, leftStand, 9);
+    setServoPositions(PCA2, rightStand, 9);
+    delay(3000);
 
-  
-  if(Bluetooth.available()>0)           //If we receive somethin, we enter this loop
-  {
-    Received = Bluetooth.read();        //We store the received byte number
-    //Serial.println(Received);         //Print for debug...
-    if (Received == 0)                  //If we receive the "0" number, mode = 1
-    {
-      MODE = 0;               //Change mode to 0 (home position)
-      Impair_start = false;   //Reset variables   
-      FM1 = 0;                //Reset values...
-      FM2 = 0;                //Reset values...
-      FM3 = 0;                //Reset values...
-      FM4 = 0;                //Reset values...
-      FM5 = 0;                //Reset values...
-      FM6 = 0;                //Reset values...
-      FM7 = 0;                //Reset values...
-      FM8 = 0;                //Reset values...
-    }
-    if (Received == 1)        //If we receive a 1, change mode to 1 and so on...
-    {
-      MODE = 1;
-    }
-    if (Received == 2)
-    {
-      MODE = 2;
-    }
-    if (Received == 3)
-    {
-      MODE = 3;
-    }
-    if (Received == 4)
-    {
-      MODE = 4;
-    }
-    if (Received == 5)
-    {
-      MODE = 5;
-    }
-    if (Received == 6)
-    {
-      MODE = 6;
-    }
-    /*If the received number is higher than 11, then we receive the values from slider
-    this will change the speed of movement by changing the delay of the loop*/
-    if (Received >= 12)
-    {
-      DELAY = map(Received,15,100,5,80); //Map delay from 5 to 80 ms
-    }
-   }
-
-  
-
-  //Home position
-  if(MODE == 0){
-    set_home_pos();
-  }
-
-  //Move Forward
-  if(MODE == 1){
-    move_frwd();
-  }
-
-  //Move Backwards
-  if(MODE == 2){
-    move_bwd();
-  }
-  
-  //Move Right
-  if(MODE == 3){
-    move_right();
-  }
-   
-  //Move Left
-  if(MODE == 4){
-    move_left();
-  }
-
-  //Rotate Left
-  if(MODE == 5){
-    rotate_left();
-  }
-
-  //Rotate Right
-  if(MODE == 6){
-    rotate_right();
-  }
- 
-delay(DELAY);         //Add delay of the loop, this will control the speed
+    Serial.println("Sitting down...");
+    setServoPositions(PCA1, leftSit, 9);
+    setServoPositions(PCA2, rightSit, 9);
+    delay(3000);
 }
 
 
 
-/////////////////////////////SET HOME POSITION
-void set_home_pos()
-{
-  Leg1_Mot1.write(home_Leg1_Mot1); 
-  Leg1_Mot2.write(home_Leg1_Mot2); 
-  Leg1_Mot3.write(home_Leg1_Mot3); 
+// Inverse Kinematics
 
-  Leg2_Mot1.write(home_Leg2_Mot1); 
-  Leg2_Mot2.write(home_Leg2_Mot2); 
-  Leg2_Mot3.write(home_Leg2_Mot3); 
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <math.h>
 
-  Leg3_Mot1.write(home_Leg3_Mot1); 
-  Leg3_Mot2.write(home_Leg3_Mot2); 
-  Leg3_Mot3.write(home_Leg3_Mot3); 
+Adafruit_PWMServoDriver PCA1(0x40), PCA2(0x41);
 
-  Leg4_Mot1.write(home_Leg4_Mot1); 
-  Leg4_Mot2.write(home_Leg4_Mot2); 
-  Leg4_Mot3.write(home_Leg4_Mot3); 
+#define SERVOMIN 150
+#define SERVOMAX 600
+#define L1 50   // Coxa length in mm
+#define L2 80   // Femur length
+#define L3 100  // Tibia length
 
-  Leg5_Mot1.write(home_Leg5_Mot1); 
-  Leg5_Mot2.write(home_Leg5_Mot2); 
-  Leg5_Mot3.write(home_Leg5_Mot3); 
+int angleToPulse(int angle) {
+  int pulse = map(constrain(angle, 0, 180), 0, 180, SERVOMIN, SERVOMAX);
+  return pulse;
+}
 
-  Leg6_Mot1.write(home_Leg6_Mot1); 
-  Leg6_Mot2.write(home_Leg6_Mot2); 
-  Leg6_Mot3.write(home_Leg6_Mot3); 
+void setServo(Adafruit_PWMServoDriver &PCA, int pin, int angle) {
+  PCA.setPWM(pin, 0, angleToPulse(angle));
+}
+
+// Inverse Kinematics function
+void inverseKinematics(float x, float y, float z, float &theta1, float &theta2, float &theta3) {
+  // θ1 (Coxa angle)
+  theta1 = atan2(y, x) * 180.0 / PI;
+
+  // Horizontal distance from coxa to foot
+  float horizontalDist = sqrt(x * x + y * y) - L1;
+
+  // Distance from femur joint to foot
+  float r = sqrt(horizontalDist * horizontalDist + z * z);
+
+  // Check if within reachable workspace
+  if (r > (L2 + L3)) r = L2 + L3;
+
+  // θ2 (Femur angle)
+  float alpha = atan2(z, horizontalDist);
+  float beta = acos((L2*L2 + r*r - L3*L3) / (2 * L2 * r));
+  theta2 = (alpha + beta) * 180.0 / PI;
+
+  // θ3 (Tibia angle)
+  theta3 = (acos((L2*L2 + L3*L3 - r*r) / (2 * L2 * L3)) * 180.0 / PI) - 90.0;
+}
+
+
+void moveLeg(Adafruit_PWMServoDriver &PCA, int coxaPin, int femurPin, int tibiaPin, float x, float y, float z) {
+  float theta1, theta2, theta3;
+  inverseKinematics(x, y, z, theta1, theta2, theta3);
+
+  setServo(PCA, coxaPin, theta1 + 90);  
+  setServo(PCA, femurPin, theta2);
+  setServo(PCA, tibiaPin, theta3);
+}
+
+void setup() {
+  Serial.begin(115200);
+  PCA1.begin(); PCA1.setPWMFreq(50);
+  PCA2.begin(); PCA2.setPWMFreq(50);
+  delay(10);
+}
+
+void loop() {
+  
+  moveLeg(PCA1, 0, 1, 2, 60, 60, -50);
+  delay(1000);
 }
 
 
 
-
-/////////////////////////////MOVE FORWARD
-void move_frwd(){
-  //Impair Lift 10 deg
-  if (FM1 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 - FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 - FM1);
-    Leg3_Mot2.write(home_Leg3_Mot2 - FM1); 
-    Leg3_Mot3.write(home_Leg3_Mot3 - FM1);
-    Leg5_Mot2.write(home_Leg5_Mot2 - FM1); 
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1);
-    FM1++;
-  }  
-      
-  //Impair rote fwd 30 deg
-  if (FM2 <= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 - FM2); 
-    Leg3_Mot1.write(home_Leg3_Mot1 - FM2); 
-    Leg5_Mot1.write(home_Leg5_Mot1 + FM2); 
-    FM2++;
-  }
-  
-  //Impair touch ground -10 deg
-  if (FM2 > 20 && FM3 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM3); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM3);
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM3); 
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM3);
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM3); 
-    Leg5_Mot3.write(home_Leg5_Mot3 + FM3);
-    FM3++;
-  } 
-  
-  //Impair rotate bwd -30 deg  
-  if (FM2 >= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 + FM4); 
-    Leg3_Mot1.write(home_Leg3_Mot1 + FM4); 
-    Leg5_Mot1.write(home_Leg5_Mot1 - FM4); 
-    FM4++;
-    Impair_start = true;      
-  }
-  if(FM4 >= 30) {
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
-    FM4 = 0;
-  }
-  
-//////////////////////////////////
-
-  if (Impair_start){
-    //Pair Lift 10 deg
-    if (FM5 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 - FM5); 
-      Leg2_Mot3.write(home_Leg2_Mot3 - FM5);
-      Leg4_Mot2.write(home_Leg4_Mot2 - FM5); 
-      Leg4_Mot3.write(home_Leg4_Mot3 - FM5);
-      Leg6_Mot2.write(home_Leg6_Mot2 - FM5); 
-      Leg6_Mot3.write(home_Leg6_Mot3 - FM5);
-      FM5++;
-    }  
-    //Pair rote fwd 30 deg
-    if (FM6 <= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 - FM6); 
-      Leg4_Mot1.write(home_Leg4_Mot1 + FM6); 
-      Leg6_Mot1.write(home_Leg6_Mot1 + FM6); 
-      FM6++;
-    }
-  
-    //Pair touch ground -10 deg
-    if (FM6 > 20 && FM7 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 + FM7); 
-      Leg2_Mot3.write(home_Leg2_Mot3 + FM7);
-      Leg4_Mot2.write(home_Leg4_Mot2 + FM7); 
-      Leg4_Mot3.write(home_Leg4_Mot3 + FM7);
-      Leg6_Mot2.write(home_Leg6_Mot2 + FM7); 
-      Leg6_Mot3.write(home_Leg6_Mot3 + FM7);
-      FM7++;
-    } 
-  
-    //Pair rotate bwd -30 deg  
-    if (FM6 >= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 + FM8); 
-      Leg4_Mot1.write(home_Leg4_Mot1 - FM8); 
-      Leg6_Mot1.write(home_Leg6_Mot1 - FM8); 
-      FM8++;      
-    }
-    if(FM8 >= 30) {
-      Impair_start = false;
-      FM5 = 0;
-      FM6 = 0;
-      FM7 = 0;
-      FM8 = 0;
-    }    
-  } 
-}//End Move Forward
+// Forward Motion code
 
 
-/////////////////////////////MOVE Backwards
-void move_bwd(){ 
-  //Impair Lift 10 deg
-  if (FM1 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 - FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 - FM1);
-    Leg3_Mot2.write(home_Leg3_Mot2 - FM1); 
-    Leg3_Mot3.write(home_Leg3_Mot3 - FM1);
-    Leg5_Mot2.write(home_Leg5_Mot2 - FM1); 
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1);
-    FM1++;
-  }  
-    
-  //Impair rote fwd 30 deg
-  if (FM2 <= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 + FM2); 
-    Leg3_Mot1.write(home_Leg3_Mot1 + FM2); 
-    Leg5_Mot1.write(home_Leg5_Mot1 - FM2); 
-    FM2++;
-  }
-  
-  //Impair touch ground -10 deg
-  if (FM2 > 20 && FM3 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM3); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM3);
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM3); 
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM3);
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM3); 
-    Leg5_Mot3.write(home_Leg5_Mot3 + FM3);
-    FM3++;
-  } 
-  
-  //Impair rotate bwd -30 deg  
-  if (FM2 >= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 - FM4); 
-    Leg3_Mot1.write(home_Leg3_Mot1 - FM4); 
-    Leg5_Mot1.write(home_Leg5_Mot1 + FM4); 
-    FM4++;
-    Impair_start = true;
-  }
-  if(FM4 >= 30) {
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
-    FM4 = 0;
-  }
-  
-//////////////////////////////////
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
-  if (Impair_start){
-    //Pair Lift 10 deg
-    if (FM5 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 - FM5); 
-      Leg2_Mot3.write(home_Leg2_Mot3 - FM5);
-      Leg4_Mot2.write(home_Leg4_Mot2 - FM5); 
-      Leg4_Mot3.write(home_Leg4_Mot3 - FM5);
-      Leg6_Mot2.write(home_Leg6_Mot2 - FM5); 
-      Leg6_Mot3.write(home_Leg6_Mot3 - FM5);
-      FM5++;
-    }  
-    //Pair rote fwd 30 deg
-    if (FM6 <= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 + FM6); 
-      Leg4_Mot1.write(home_Leg4_Mot1 - FM6); 
-      Leg6_Mot1.write(home_Leg6_Mot1 - FM6); 
-      FM6++;
-    }
-  
-    //Pair touch ground -10 deg
-    if (FM6 > 20 && FM7 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 + FM7); 
-      Leg2_Mot3.write(home_Leg2_Mot3 + FM7);
-      Leg4_Mot2.write(home_Leg4_Mot2 + FM7); 
-      Leg4_Mot3.write(home_Leg4_Mot3 + FM7);
-      Leg6_Mot2.write(home_Leg6_Mot2 + FM7); 
-      Leg6_Mot3.write(home_Leg6_Mot3 + FM7);
-      FM7++;
-    } 
-  
-    //Pair rotate bwd -30 deg  
-    if (FM6 >= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 - FM8); 
-      Leg4_Mot1.write(home_Leg4_Mot1 + FM8); 
-      Leg6_Mot1.write(home_Leg6_Mot1 + FM8); 
-      FM8++;      
-    }
-    if(FM8 >= 30) {
-      FM5 = 0;
-      FM6 = 0;
-      FM7 = 0;
-      FM8 = 0;
-    }    
-  } 
-}//End Move Backwards
+Adafruit_PWMServoDriver PCA1(0x40), PCA2(0x41);
 
+#define SERVOMIN 150
+#define SERVOMAX 600
 
+int angleToPulse(int angle) {
+  return map(constrain(angle, 0, 180), 0, 180, SERVOMIN, SERVOMAX);
+}
 
-/////////////////////////////Rotate Left
-void rotate_left(){
-  //Impair Lift 10 deg
-  if (FM1 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 - FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 - FM1);
-    Leg3_Mot2.write(home_Leg3_Mot2 - FM1); 
-    Leg3_Mot3.write(home_Leg3_Mot3 - FM1);
-    Leg5_Mot2.write(home_Leg5_Mot2 - FM1); 
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1);
-    FM1++;
-  }  
-      
-  //Impair rote fwd 30 deg
-  if (FM2 <= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 - FM2); 
-    Leg3_Mot1.write(home_Leg3_Mot1 - FM2); 
-    Leg5_Mot1.write(home_Leg5_Mot1 - FM2); 
-    FM2++;
-  }
-  
-  //Impair touch ground -10 deg
-  if (FM2 > 20 && FM3 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM3); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM3);
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM3); 
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM3);
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM3); 
-    Leg5_Mot3.write(home_Leg5_Mot3 + FM3);
-    FM3++;
-  } 
-  
-  //Impair rotate bwd -30 deg  
-  if (FM2 >= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 + FM4); 
-    Leg3_Mot1.write(home_Leg3_Mot1 + FM4); 
-    Leg5_Mot1.write(home_Leg5_Mot1 + FM4); 
-    FM4++;
-    Impair_start = true;      
-  }
-  if(FM4 >= 30) {
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
-    FM4 = 0;
-  }
-  
-//////////////////////////////////
-
-  if (Impair_start){
-    //Pair Lift 10 deg
-    if (FM5 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 - FM5); 
-      Leg2_Mot3.write(home_Leg2_Mot3 - FM5);
-      Leg4_Mot2.write(home_Leg4_Mot2 - FM5); 
-      Leg4_Mot3.write(home_Leg4_Mot3 - FM5);
-      Leg6_Mot2.write(home_Leg6_Mot2 - FM5); 
-      Leg6_Mot3.write(home_Leg6_Mot3 - FM5);
-      FM5++;
-    }  
-    //Pair rote fwd 30 deg
-    if (FM6 <= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 - FM6); 
-      Leg4_Mot1.write(home_Leg4_Mot1 - FM6); 
-      Leg6_Mot1.write(home_Leg6_Mot1 - FM6); 
-      FM6++;
-    }
-  
-    //Pair touch ground -10 deg
-    if (FM6 > 20 && FM7 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 + FM7); 
-      Leg2_Mot3.write(home_Leg2_Mot3 + FM7);
-      Leg4_Mot2.write(home_Leg4_Mot2 + FM7); 
-      Leg4_Mot3.write(home_Leg4_Mot3 + FM7);
-      Leg6_Mot2.write(home_Leg6_Mot2 + FM7); 
-      Leg6_Mot3.write(home_Leg6_Mot3 + FM7);
-      FM7++;
-    } 
-  
-    //Pair rotate bwd -30 deg  
-    if (FM6 >= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 + FM8); 
-      Leg4_Mot1.write(home_Leg4_Mot1 + FM8); 
-      Leg6_Mot1.write(home_Leg6_Mot1 + FM8); 
-      FM8++;      
-    }
-    if(FM8 >= 30) {
-      Impair_start = false;
-      FM5 = 0;
-      FM6 = 0;
-      FM7 = 0;
-      FM8 = 0;
-    }    
-  } 
-}//End Rotate Left
-
-
-/////////////////////////////Rotate Right
-void rotate_right(){ 
-  //Impair Lift 10 deg
-  if (FM1 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 - FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 - FM1);
-    Leg3_Mot2.write(home_Leg3_Mot2 - FM1); 
-    Leg3_Mot3.write(home_Leg3_Mot3 - FM1);
-    Leg5_Mot2.write(home_Leg5_Mot2 - FM1); 
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1);
-    FM1++;
-  }  
-    
-  //Impair rote fwd 30 deg
-  if (FM2 <= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 + FM2); 
-    Leg3_Mot1.write(home_Leg3_Mot1 + FM2); 
-    Leg5_Mot1.write(home_Leg5_Mot1 + FM2); 
-    FM2++;
-  }
-  
-  //Impair touch ground -10 deg
-  if (FM2 > 20 && FM3 <=10){
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM3); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM3);
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM3); 
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM3);
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM3); 
-    Leg5_Mot3.write(home_Leg5_Mot3 + FM3);
-    FM3++;
-  } 
-  
-  //Impair rotate bwd -30 deg  
-  if (FM2 >= 30)
-  {
-    Leg1_Mot1.write(home_Leg1_Mot1 - FM4); 
-    Leg3_Mot1.write(home_Leg3_Mot1 - FM4); 
-    Leg5_Mot1.write(home_Leg5_Mot1 - FM4); 
-    FM4++;
-    Impair_start = true;
-  }
-  if(FM4 >= 30) {
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
-    FM4 = 0;
-  }
-  
-//////////////////////////////////
-
-  if (Impair_start){
-    //Pair Lift 10 deg
-    if (FM5 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 - FM5); 
-      Leg2_Mot3.write(home_Leg2_Mot3 - FM5);
-      Leg4_Mot2.write(home_Leg4_Mot2 - FM5); 
-      Leg4_Mot3.write(home_Leg4_Mot3 - FM5);
-      Leg6_Mot2.write(home_Leg6_Mot2 - FM5); 
-      Leg6_Mot3.write(home_Leg6_Mot3 - FM5);
-      FM5++;
-    }  
-    //Pair rote fwd 30 deg
-    if (FM6 <= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 + FM6); 
-      Leg4_Mot1.write(home_Leg4_Mot1 + FM6); 
-      Leg6_Mot1.write(home_Leg6_Mot1 + FM6); 
-      FM6++;
-    }
-  
-    //Pair touch ground -10 deg
-    if (FM6 > 20 && FM7 <=10){
-      Leg2_Mot2.write(home_Leg2_Mot2 + FM7); 
-      Leg2_Mot3.write(home_Leg2_Mot3 + FM7);
-      Leg4_Mot2.write(home_Leg4_Mot2 + FM7); 
-      Leg4_Mot3.write(home_Leg4_Mot3 + FM7);
-      Leg6_Mot2.write(home_Leg6_Mot2 + FM7); 
-      Leg6_Mot3.write(home_Leg6_Mot3 + FM7);
-      FM7++;
-    } 
-  
-    //Pair rotate bwd -30 deg  
-    if (FM6 >= 30)
-    {
-      Leg2_Mot1.write(home_Leg2_Mot1 - FM8); 
-      Leg4_Mot1.write(home_Leg4_Mot1 - FM8); 
-      Leg6_Mot1.write(home_Leg6_Mot1 - FM8); 
-      FM8++;      
-    }
-    if(FM8 >= 30) {
-      FM5 = 0;
-      FM6 = 0;
-      FM7 = 0;
-      FM8 = 0;
-    }    
-  } 
-}//End Rotate Right
-
-
-/////////////////////////////Move Right
-void move_right(){
-  //Impair Motor 2 -20 Motor 3 +20
-  if (FM1 <= 20){    
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM1); 
-
-    Leg2_Mot2.write(home_Leg2_Mot2 + FM1); 
-    Leg2_Mot3.write(home_Leg2_Mot3 - FM1*2);
-        
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM1);     
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM1); 
-
-    Leg4_Mot2.write(home_Leg4_Mot2 - FM1); 
-    Leg4_Mot3.write(home_Leg4_Mot3 + FM1*2);
-    
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM1);     
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1); 
-  
-    Leg6_Mot2.write(home_Leg6_Mot2 - FM1); 
-    Leg6_Mot3.write(home_Leg6_Mot3 + FM1*2);  
-    FM1++;
-  }  
-
-  if(FM1 >= 20 && FM2 <= 20){
-     Leg2_Mot2.write(home_Leg2_Mot2 + FM1   + FM2); 
-     Leg2_Mot3.write(home_Leg2_Mot3 - FM1*2 + FM2*2);
-
-     Leg4_Mot2.write(home_Leg4_Mot2 - FM1   + FM2); 
-     Leg4_Mot3.write(home_Leg4_Mot3 + FM1*2 - FM2*2);
-
-     Leg6_Mot2.write(home_Leg6_Mot2 - FM1   + FM2); 
-     Leg6_Mot3.write(home_Leg6_Mot3 + FM1*2 - FM2*2);
-     FM2++;
-  }
-
-   if(FM2 >= 20 && FM3 <= 20){
-    Leg1_Mot2.write(home_Leg1_Mot2 + FM1 - FM3); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM1 - FM1); 
-   
-            
-    Leg3_Mot2.write(home_Leg3_Mot2 + FM1 - FM3);     
-    Leg3_Mot3.write(home_Leg3_Mot3 + FM1 - FM3); 
-
-    
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM1 - FM3);     
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1 + FM3); 
-  
-    FM3++;
-  }
-
-  if(FM3 >= 20){
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
-  }
-
+void setServo(Adafruit_PWMServoDriver &PCA, int pin, int angle) {
+  if (pin >= 0) PCA.setPWM(pin, 0, angleToPulse(angle));
 }
 
 
+const int L1[] = {0, 1, -1};  
+const int L2[] = {3, 4, 5};      
+const int L3[] = {6, 13, 14};   
 
 
-/////////////////////////////Move Left
-void move_left(){
-  //Impair Motor 2 -20 Motor 3 +20
-  if (FM1 <= 20){    
-    Leg4_Mot2.write(home_Leg4_Mot2 + FM1); 
-    Leg4_Mot3.write(home_Leg4_Mot3 + FM1); 
+const int R1[] = {0, 1, 2};    
+const int R2[] = {3, 4, 5};     
+const int R3[] = {6, 7, 8};     
 
-    Leg5_Mot2.write(home_Leg5_Mot2 + FM1); 
-    Leg5_Mot3.write(home_Leg5_Mot3 - FM1*2);
-        
-    Leg6_Mot2.write(home_Leg6_Mot2 + FM1);     
-    Leg6_Mot3.write(home_Leg6_Mot3 + FM1); 
+void liftLeg(Adafruit_PWMServoDriver &PCA, const int leg[3]) {
+  setServo(PCA, leg[1], 60); 
+  setServo(PCA, leg[2], 60);
+}
 
-    Leg3_Mot2.write(home_Leg4_Mot3 - FM1); 
-    Leg3_Mot3.write(home_Leg4_Mot3 + FM1*2);
-    
-    Leg2_Mot2.write(home_Leg2_Mot2 + FM1);     
-    Leg2_Mot3.write(home_Leg2_Mot3 - FM1); 
+void dropLeg(Adafruit_PWMServoDriver &PCA, const int leg[3]) {
+  setServo(PCA, leg[1], 90); 
+  setServo(PCA, leg[2], 90); 
+}
+
+void moveCoxaForward(Adafruit_PWMServoDriver &PCA, const int leg[3], int offset) {
+  setServo(PCA, leg[0], 90 - offset); 
+}
+
+void moveCoxaBackward(Adafruit_PWMServoDriver &PCA, const int leg[3], int offset) {
+  setServo(PCA, leg[0], 90 + offset); 
+}
+
+void tripodStepA() {
+
+  liftLeg(PCA1, L1); moveCoxaForward(PCA1, L1, 20);
+  liftLeg(PCA1, L3); moveCoxaForward(PCA1, L3, 20);
+  liftLeg(PCA2, R2); moveCoxaForward(PCA2, R2, 20);
+
+  delay(400);
+
+  // Drop Tripod A
+  dropLeg(PCA1, L1); dropLeg(PCA1, L3); dropLeg(PCA2, R2);
+
+  // Push body forward using Tripod B: L2, R1, R3
+  moveCoxaBackward(PCA1, L2, 20);
+  moveCoxaBackward(PCA2, R1, 20);
+  moveCoxaBackward(PCA2, R3, 20);
+
+  delay(400);
+}
+
+void tripodStepB() {
   
-    Leg1_Mot2.write(home_Leg1_Mot2 - FM1); 
-    Leg1_Mot3.write(home_Leg1_Mot3 + FM1*2);  
-    FM1++;
-  }  
+  liftLeg(PCA1, L2); moveCoxaForward(PCA1, L2, 20);
+  liftLeg(PCA2, R1); moveCoxaForward(PCA2, R1, 20);
+  liftLeg(PCA2, R3); moveCoxaForward(PCA2, R3, 20);
 
-  if(FM1 >= 20 && FM2 <= 20){
-     Leg5_Mot2.write(home_Leg5_Mot2 + FM1   + FM2); 
-     Leg5_Mot3.write(home_Leg5_Mot3 - FM1*2 + FM2*2);
+  delay(400);
 
-     Leg3_Mot2.write(home_Leg3_Mot2 - FM1   + FM2); 
-     Leg3_Mot3.write(home_Leg3_Mot3 + FM1*2 - FM2*2);
+  dropLeg(PCA1, L2); dropLeg(PCA2, R1); dropLeg(PCA2, R3);
 
-     Leg1_Mot2.write(home_Leg1_Mot2 - FM1   + FM2); 
-     Leg1_Mot3.write(home_Leg1_Mot3 + FM1*2 - FM2*2);
-     FM2++;
-  }
-
-   if(FM2 >= 20 && FM3 <= 20){
-    Leg6_Mot2.write(home_Leg6_Mot2 + FM1 - FM3); 
-    Leg6_Mot3.write(home_Leg6_Mot3 + FM1 - FM1); 
-   
-            
-    Leg4_Mot2.write(home_Leg4_Mot2 + FM1 - FM3);     
-    Leg4_Mot3.write(home_Leg4_Mot3 + FM1 - FM3); 
-
-    
-    Leg2_Mot2.write(home_Leg2_Mot2 + FM1 - FM3);     
-    Leg2_Mot3.write(home_Leg2_Mot3 - FM1 + FM3); 
   
-    FM3++;
-  }
-  if(FM3 >= 20){
-    FM1 = 0;
-    FM2 = 0;
-    FM3 = 0;
+  moveCoxaBackward(PCA1, L1, 20);
+  moveCoxaBackward(PCA1, L3, 20);
+  moveCoxaBackward(PCA2, R2, 20);
+
+  delay(400);
+}
+
+void setup() {
+  Serial.begin(115200);
+  PCA1.begin(); PCA1.setPWMFreq(50);
+  PCA2.begin(); PCA2.setPWMFreq(50);
+  delay(10);
+
+  int neutralCoxa = 90, neutralFemur = 90, neutralTibia = 90;
+  for (int i = 0; i < 3; i++) {
+    setServo(PCA1, L1[i], (L1[i] >= 0 ? (i == 0 ? neutralCoxa : neutralFemur) : 0));
+    setServo(PCA1, L2[i], (i == 0 ? neutralCoxa : (i == 1 ? neutralFemur : neutralTibia)));
+    setServo(PCA1, L3[i], (i == 0 ? neutralCoxa : (i == 1 ? neutralFemur : neutralTibia)));
+
+    setServo(PCA2, R1[i], (i == 0 ? neutralCoxa : (i == 1 ? neutralFemur : neutralTibia)));
+    setServo(PCA2, R2[i], (i == 0 ? neutralCoxa : (i == 1 ? neutralFemur : neutralTibia)));
+    setServo(PCA2, R3[i], (i == 0 ? neutralCoxa : (i == 1 ? neutralFemur : neutralTibia)));
   }
 }
+
+void loop() {
+  tripodStepA();
+  tripodStepB();
+}
+
+
